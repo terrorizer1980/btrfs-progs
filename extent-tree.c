@@ -999,8 +999,10 @@ again:
 		 * For simplicity, we just do not add new inline back
 		 * ref if there is any back ref item.
 		 */
+		/* TODO: bg-key ok? */
 		if (find_next_key(path, &key) == 0 && key.objectid == bytenr &&
 		    key.type < BTRFS_BLOCK_GROUP_ITEM_KEY) {
+			printf("SKIP: type %d\n", key.type);
 			err = -EAGAIN;
 			goto out;
 		}
@@ -1532,8 +1534,17 @@ static int write_one_cache_group(struct btrfs_trans_handle *trans,
 	struct btrfs_root *extent_root = trans->fs_info->extent_root;
 	unsigned long bi;
 	struct extent_buffer *leaf;
+	struct btrfs_key search_key;
 
-	ret = btrfs_search_slot(trans, extent_root, &cache->key, path, 0, 1);
+	if (cache->key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+		search_key.objectid = cache->key.offset;
+		search_key.type = cache->key.type;
+		search_key.offset = cache->key.objectid;
+	} else {
+		search_key = cache->key;
+	}
+
+	ret = btrfs_search_slot(trans, extent_root, &search_key, path, 0, 1);
 	if (ret < 0)
 		goto fail;
 	BUG_ON(ret);
@@ -2631,9 +2642,16 @@ static int find_first_block_group(struct btrfs_root *root,
 		}
 		btrfs_item_key_to_cpu(leaf, &found_key, slot);
 
-		if (found_key.objectid >= key->objectid &&
-		    found_key.type == BTRFS_BLOCK_GROUP_ITEM_KEY)
-			return 0;
+		if (btrfs_fs_incompat(root->fs_info, BG_KEY)) {
+			/* No change of the key, same check as normal BGI */
+			if (found_key.objectid >= key->objectid &&
+			    found_key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY)
+				return 0;
+		} else {
+			if (found_key.objectid >= key->objectid &&
+			    found_key.type == BTRFS_BLOCK_GROUP_ITEM_KEY)
+				return 0;
+		}
 		path->slots[0]++;
 	}
 	ret = -ENOENT;
@@ -2658,8 +2676,11 @@ int btrfs_read_block_groups(struct btrfs_root *root)
 
 	root = info->extent_root;
 	key.objectid = 0;
+	if (btrfs_fs_incompat(info, BG_KEY))
+		key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+	else
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	key.offset = 0;
-	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
@@ -2685,12 +2706,29 @@ int btrfs_read_block_groups(struct btrfs_root *root)
 		read_extent_buffer(leaf, &cache->item,
 				   btrfs_item_ptr_offset(leaf, path->slots[0]),
 				   sizeof(cache->item));
-		memcpy(&cache->key, &found_key, sizeof(found_key));
+		if (btrfs_fs_incompat(info, BG_KEY)) {
+			/* start */
+			cache->key.objectid = found_key.offset;
+			/* length */
+			cache->key.offset = found_key.objectid;
+		} else {
+			memcpy(&cache->key, &found_key, sizeof(found_key));
+		}
 		cache->cached = 0;
 		cache->pinned = 0;
-		key.objectid = found_key.objectid + found_key.offset;
-		if (found_key.offset == 0)
-			key.objectid++;
+
+		/* Advance */
+		if (btrfs_fs_incompat(info, BG_KEY)) {
+			printf("READ NEXT: obj %llu %d %llu before iter\n",
+					(unsigned long long)key.objectid,
+					found_key.type,
+					(unsigned long long)key.offset);
+			key.offset++;
+		} else {
+			key.objectid = found_key.objectid + found_key.offset;
+			if (found_key.offset == 0)
+				key.objectid++;
+		}
 		btrfs_release_path(path);
 
 		/*
@@ -2698,7 +2736,7 @@ int btrfs_read_block_groups(struct btrfs_root *root)
 		 * group cache tree, as its length is 0, it won't get
 		 * freed at close_ctree() time.
 		 */
-		if (found_key.offset == 0) {
+		if (cache->key.offset == 0) {
 			free(cache);
 			continue;
 		}
@@ -2718,17 +2756,17 @@ int btrfs_read_block_groups(struct btrfs_root *root)
 
 		exclude_super_stripes(info, cache);
 
-		ret = update_space_info(info, cache->flags, found_key.offset,
+		ret = update_space_info(info, cache->flags, cache->key.offset,
 					btrfs_block_group_used(&cache->item),
 					&space_info);
 		BUG_ON(ret);
 		cache->space_info = space_info;
 
 		/* use EXTENT_LOCKED to prevent merging */
-		set_extent_bits(block_group_cache, found_key.objectid,
-				found_key.objectid + found_key.offset - 1,
+		set_extent_bits(block_group_cache, cache->key.objectid,
+				cache->key.objectid + cache->key.offset - 1,
 				bit | EXTENT_LOCKED);
-		set_state_private(block_group_cache, found_key.objectid,
+		set_state_private(block_group_cache, cache->key.objectid,
 				  (unsigned long)cache);
 	}
 	ret = 0;
@@ -2753,7 +2791,10 @@ btrfs_add_block_group(struct btrfs_fs_info *fs_info, u64 bytes_used, u64 type,
 	cache->key.objectid = chunk_offset;
 	cache->key.offset = size;
 
-	cache->key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	if (btrfs_fs_incompat(fs_info, BG_KEY))
+		cache->key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+	else
+		cache->key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	btrfs_set_block_group_used(&cache->item, bytes_used);
 	btrfs_set_block_group_chunk_objectid(&cache->item,
 					     BTRFS_FIRST_CHUNK_TREE_OBJECTID);
@@ -2786,10 +2827,22 @@ int btrfs_make_block_group(struct btrfs_trans_handle *trans,
 	int ret;
 	struct btrfs_root *extent_root = fs_info->extent_root;
 	struct btrfs_block_group_cache *cache;
+	struct btrfs_key key;
+
+	printf("MK: start %llu len %llu\n",
+			(unsigned long long)chunk_offset,
+			(unsigned long long)size);
 
 	cache = btrfs_add_block_group(fs_info, bytes_used, type, chunk_offset,
 				      size);
-	ret = btrfs_insert_item(trans, extent_root, &cache->key, &cache->item,
+	if (btrfs_fs_incompat(fs_info, BG_KEY)) {
+		key.objectid = size;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+		key.offset = chunk_offset;
+	} else {
+		key = cache->key;
+	}
+	ret = btrfs_insert_item(trans, extent_root, &key, &cache->item,
 				sizeof(cache->item));
 	BUG_ON(ret);
 
@@ -2855,9 +2908,13 @@ int btrfs_make_block_groups(struct btrfs_trans_handle *trans,
 		cache = kzalloc(sizeof(*cache), GFP_NOFS);
 		BUG_ON(!cache);
 
+		/* In-memory order, BGI format */
 		cache->key.objectid = cur_start;
 		cache->key.offset = group_size;
-		cache->key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+		if (btrfs_fs_incompat(fs_info, BG_KEY))
+			cache->key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+		else
+			cache->key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 
 		btrfs_set_block_group_used(&cache->item, 0);
 		btrfs_set_block_group_chunk_objectid(&cache->item,
@@ -2881,13 +2938,24 @@ int btrfs_make_block_groups(struct btrfs_trans_handle *trans,
 	/* then insert all the items */
 	cur_start = 0;
 	while(cur_start < total_bytes) {
+		struct btrfs_key key;
+
 		cache = btrfs_lookup_block_group(fs_info, cur_start);
 		BUG_ON(!cache);
 
-		ret = btrfs_insert_item(trans, extent_root, &cache->key, &cache->item,
+		key.type = cache->key.type;
+		if (key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+			key.objectid = cache->key.offset;
+			key.offset = cache->key.objectid;
+		} else {
+			key.objectid = cache->key.objectid;
+			key.offset = cache->key.offset;
+		}
+		ret = btrfs_insert_item(trans, extent_root, &key, &cache->item,
 					sizeof(cache->item));
 		BUG_ON(ret);
 
+		/* This works for both */
 		cur_start = cache->key.objectid + cache->key.offset;
 	}
 	return 0;
@@ -2915,9 +2983,15 @@ static int free_block_group_item(struct btrfs_trans_handle *trans,
 	struct btrfs_root *root = fs_info->extent_root;
 	int ret = 0;
 
-	key.objectid = bytenr;
-	key.offset = len;
-	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	if (btrfs_fs_incompat(fs_info, BG_KEY)) {
+		key.objectid = len;
+		key.offset = bytenr;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+	} else {
+		key.objectid = bytenr;
+		key.offset = len;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	}
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -3185,9 +3259,15 @@ int btrfs_free_block_group(struct btrfs_trans_handle *trans,
 	if (!path)
 		return -ENOMEM;
 
-	key.objectid = bytenr;
-	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
-	key.offset = len;
+	if (btrfs_fs_incompat(fs_info, BG_KEY)) {
+		key.objectid = len;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+		key.offset = bytenr;
+	} else {
+		key.objectid = bytenr;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+		key.offset = len;
+	}
 
 	/* Double check the block group to ensure it's empty */
 	ret = btrfs_search_slot(trans, extent_root, &key, path, 0, 0);

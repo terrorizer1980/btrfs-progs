@@ -86,6 +86,12 @@ static const struct btrfs_fs_feature {
 		VERSION_TO_STRING2(4,0),
 		NULL, 0,
 		"no explicit hole extents for files" },
+	{ "bg-key", BTRFS_FEATURE_INCOMPAT_BG_KEY,
+		"bg_key",
+		VERSION_TO_STRING2(5, 0),
+		NULL, 0,
+		NULL, 0,
+		"store block group items in a more packed way" },
 	/* Keep this one last */
 	{ "list-all", BTRFS_FEATURE_LIST_ALL, NULL }
 };

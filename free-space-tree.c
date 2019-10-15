@@ -1051,6 +1051,12 @@ int populate_free_space_tree(struct btrfs_trans_handle *trans,
 		} else if (key.type == BTRFS_BLOCK_GROUP_ITEM_KEY) {
 			if (key.objectid != block_group->key.objectid)
 				break;
+		} else if (key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+			printf("POPULATE: off %llu ? bg->objid %llu\n",
+					(unsigned long long)key.offset,
+					(unsigned long long)block_group->key.objectid);
+			if (key.offset != block_group->key.objectid)
+				break;
 		}
 
 		ret = btrfs_next_item(extent_root, path);

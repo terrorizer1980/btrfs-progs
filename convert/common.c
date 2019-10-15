@@ -672,9 +672,20 @@ static void insert_temp_block_group(struct extent_buffer *buf,
 
 	btrfs_set_header_nritems(buf, *slot + 1);
 	(*itemoff) -= sizeof(bgi);
-	btrfs_set_disk_key_type(&disk_key, BTRFS_BLOCK_GROUP_ITEM_KEY);
-	btrfs_set_disk_key_objectid(&disk_key, bytenr);
-	btrfs_set_disk_key_offset(&disk_key, len);
+	if (cfg->features & BTRFS_FEATURE_INCOMPAT_BG_KEY) {
+		/* length, key, offset */
+		printf("INSERT tmp: start %llu len %llu\n",
+				(unsigned long long)bytenr,
+				(unsigned long long)len);
+		btrfs_set_disk_key_objectid(&disk_key, len);
+		btrfs_set_disk_key_type(&disk_key, BTRFS_BLOCK_GROUP_ITEM_NEW_KEY);
+		btrfs_set_disk_key_offset(&disk_key, bytenr);
+	} else {
+		/* offset, key, length */
+		btrfs_set_disk_key_objectid(&disk_key, bytenr);
+		btrfs_set_disk_key_type(&disk_key, BTRFS_BLOCK_GROUP_ITEM_KEY);
+		btrfs_set_disk_key_offset(&disk_key, len);
+	}
 	btrfs_set_item_key(buf, &disk_key, *slot);
 	btrfs_set_item_offset(buf, btrfs_item_nr(*slot), *itemoff);
 	btrfs_set_item_size(buf, btrfs_item_nr(*slot), sizeof(bgi));

@@ -590,8 +590,11 @@ static int next_block_group(struct btrfs_root *root,
 		btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
 		if (key.type == BTRFS_BLOCK_GROUP_ITEM_KEY)
 			goto out;
+		else if (key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY)
+			goto out;
 	}
 out:
+	printf("next bg ret=%d\n", ret);
 	return ret;
 }
 
@@ -609,15 +612,23 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 	struct btrfs_path path;
 	int ret = 0;
 
+	printf("CLEANUP TMP CHUNKS\n");
+
 	btrfs_init_path(&path);
 	trans = btrfs_start_transaction(root, 1);
 	BUG_ON(IS_ERR(trans));
 
 	key.objectid = 0;
-	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	if (btrfs_fs_incompat(fs_info, BG_KEY))
+		key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+	else
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	key.offset = 0;
 
 	while (1) {
+		u64 bg_start;
+		u64 bg_length;
+
 		/*
 		 * as the rest of the loop may modify the tree, we need to
 		 * start a new search each time.
@@ -631,9 +642,25 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 
 		btrfs_item_key_to_cpu(path.nodes[0], &found_key,
 				      path.slots[0]);
-		if (found_key.objectid < key.objectid)
+		printf(" found %llu,%d,%llu\n",
+				(unsigned long long)found_key.objectid,
+				found_key.type,
+				(unsigned long long)found_key.offset);
+		if (found_key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+			bg_start = found_key.offset;
+			bg_length = found_key.objectid;
+		} else if (found_key.type == BTRFS_BLOCK_GROUP_ITEM_KEY) {
+			bg_start = found_key.objectid;
+			bg_length = found_key.offset;
+			if (found_key.objectid < key.objectid)
+				goto out;
+		} else {
+			printf("Unknown key %d, exit early\n", found_key.type);
 			goto out;
-		if (found_key.type != BTRFS_BLOCK_GROUP_ITEM_KEY) {
+			goto next;
+		}
+		if (found_key.type != BTRFS_BLOCK_GROUP_ITEM_KEY &&
+		    found_key.type != BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
 			ret = next_block_group(root, &path);
 			if (ret < 0)
 				goto out;
@@ -643,7 +670,20 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 			}
 			btrfs_item_key_to_cpu(path.nodes[0], &found_key,
 					      path.slots[0]);
+			if (found_key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+				bg_start = found_key.offset;
+				bg_length = found_key.objectid;
+			} else if (found_key.type == BTRFS_BLOCK_GROUP_ITEM_KEY) {
+				bg_start = found_key.objectid;
+				bg_length = found_key.offset;
+			} else {
+				BUG();
+			}
 		}
+
+		printf(" clean bg start %llu len %llu\n", bg_start, bg_length);
+		if (found_key.type != BTRFS_BLOCK_GROUP_ITEM_NEW_KEY)
+			BUG();
 
 		bgi = btrfs_item_ptr(path.nodes[0], path.slots[0],
 				     struct btrfs_block_group_item);
@@ -654,26 +694,57 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 							     bgi);
 
 			ret = btrfs_free_block_group(trans, fs_info,
-					found_key.objectid, found_key.offset);
+					bg_start, bg_length);
 			if (ret < 0)
 				goto out;
 
 			if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
 			    BTRFS_BLOCK_GROUP_DATA)
-				alloc->data -= found_key.offset;
+				alloc->data -= bg_length;
 			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
 				 BTRFS_BLOCK_GROUP_METADATA)
-				alloc->metadata -= found_key.offset;
+				alloc->metadata -= bg_length;
 			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
 				 BTRFS_BLOCK_GROUP_SYSTEM)
-				alloc->system -= found_key.offset;
+				alloc->system -= bg_length;
 			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
 				 (BTRFS_BLOCK_GROUP_METADATA |
 				  BTRFS_BLOCK_GROUP_DATA))
-				alloc->mixed -= found_key.offset;
+				alloc->mixed -= bg_length;
 		}
 		btrfs_release_path(&path);
-		key.objectid = found_key.objectid + found_key.offset;
+		if (key.type == BTRFS_BLOCK_GROUP_ITEM_NEW_KEY) {
+			/* set up for the next search where we ended */
+			key.objectid = bg_length;
+			key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+			key.offset = bg_start + bg_length;
+		} else if (key.type == BTRFS_BLOCK_GROUP_ITEM_KEY) {
+			key.objectid = bg_start + bg_length;
+			key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+			key.offset = 0;
+		} else {
+next:
+			/* This does not work */
+
+			/*
+			 * starting point must have larger objectid, key will
+			 * be different
+			 */
+			key.objectid = found_key.objectid + 1;
+
+			/*
+			 * what we're looking for, if new BGI key is smaller
+			 * then what we're going to find, the same item will
+			 * be found and no progress made
+			 */
+			key.type = BTRFS_BLOCK_GROUP_ITEM_NEW_KEY;
+
+			/*
+			 * We can still find larger block group but on a
+			 * smaller offset
+			 */
+			key.offset = 0;
+		}
 	}
 out:
 	if (trans)

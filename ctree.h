@@ -489,6 +489,7 @@ struct btrfs_super_block {
 #define BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA	(1ULL << 8)
 #define BTRFS_FEATURE_INCOMPAT_NO_HOLES		(1ULL << 9)
 #define BTRFS_FEATURE_INCOMPAT_METADATA_UUID    (1ULL << 10)
+#define BTRFS_FEATURE_INCOMPAT_BG_KEY		(1ULL << 12)
 
 #define BTRFS_FEATURE_COMPAT_SUPP		0ULL
 
@@ -512,7 +513,8 @@ struct btrfs_super_block {
 	 BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS |		\
 	 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA |	\
 	 BTRFS_FEATURE_INCOMPAT_NO_HOLES |		\
-	 BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
+	 BTRFS_FEATURE_INCOMPAT_METADATA_UUID |		\
+	 BTRFS_FEATURE_INCOMPAT_BG_KEY)
 
 /*
  * A leaf is full of items. offset and size tell us where to find
@@ -1264,6 +1266,9 @@ static inline u32 BTRFS_MAX_XATTR_SIZE(const struct btrfs_fs_info *info)
  */
 #define BTRFS_DIR_ITEM_KEY	84
 #define BTRFS_DIR_INDEX_KEY	96
+
+/* BGI with swapped objectid/offset */
+#define BTRFS_BLOCK_GROUP_ITEM_NEW_KEY 100
 
 /*
  * extent data is for file data

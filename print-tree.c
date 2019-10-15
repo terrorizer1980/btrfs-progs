@@ -656,6 +656,7 @@ void print_key_type(FILE *stream, u64 objectid, u8 type)
 		[BTRFS_EXTENT_CSUM_KEY]		= "EXTENT_CSUM",
 		[BTRFS_EXTENT_DATA_KEY]		= "EXTENT_DATA",
 		[BTRFS_BLOCK_GROUP_ITEM_KEY]	= "BLOCK_GROUP_ITEM",
+		[BTRFS_BLOCK_GROUP_ITEM_NEW_KEY] = "BLOCK_GROUP_ITEM_NEW",
 		[BTRFS_FREE_SPACE_INFO_KEY]	= "FREE_SPACE_INFO",
 		[BTRFS_FREE_SPACE_EXTENT_KEY]	= "FREE_SPACE_EXTENT",
 		[BTRFS_FREE_SPACE_BITMAP_KEY]	= "FREE_SPACE_BITMAP",
@@ -999,6 +1000,21 @@ static void print_block_group_item(struct extent_buffer *eb,
 		flags_str);
 }
 
+static void print_block_group_item_new(struct extent_buffer *eb,
+		struct btrfs_block_group_item *bgi)
+{
+	struct btrfs_block_group_item bg_item;
+	char flags_str[256];
+
+	read_extent_buffer(eb, &bg_item, (unsigned long)bgi, sizeof(bg_item));
+	memset(flags_str, 0, sizeof(flags_str));
+	bg_flags_to_str(btrfs_block_group_flags(&bg_item), flags_str);
+	printf("\t\tblock group NEW used %llu chunk_objectid %llu flags %s\n",
+		(unsigned long long)btrfs_block_group_used(&bg_item),
+		(unsigned long long)btrfs_block_group_chunk_objectid(&bg_item),
+		flags_str);
+}
+
 static void print_extent_data_ref(struct extent_buffer *eb, int slot)
 {
 	struct btrfs_extent_data_ref *dref;
@@ -1308,6 +1324,9 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 			break;
 		case BTRFS_BLOCK_GROUP_ITEM_KEY:
 			print_block_group_item(eb, ptr);
+			break;
+		case BTRFS_BLOCK_GROUP_ITEM_NEW_KEY:
+			print_block_group_item_new(eb, ptr);
 			break;
 		case BTRFS_FREE_SPACE_INFO_KEY:
 			print_free_space_info(eb, i);

@@ -1166,6 +1166,11 @@ int btrfs_search_slot(struct btrfs_trans_handle *trans,
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	u8 lowest_level = 0;
 
+	printf("SEARCH SLOT: key [%llu,%d,%llu]\n",
+			(unsigned long long)key->objectid,
+			key->type,
+			(unsigned long long)key->offset);
+
 	lowest_level = p->lowest_level;
 	WARN_ON(lowest_level && ins_len > 0);
 	WARN_ON(p->nodes[0] != NULL);
@@ -2731,6 +2736,11 @@ int btrfs_insert_item(struct btrfs_trans_handle *trans, struct btrfs_root
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
+
+	printf("INSERT: key [%llu,%d,%llu]\n",
+			(unsigned long long)cpu_key->objectid,
+			cpu_key->type,
+			(unsigned long long)cpu_key->offset);
 
 	ret = btrfs_insert_empty_item(trans, root, path, cpu_key, data_size);
 	if (!ret) {
